@@ -11,7 +11,34 @@ import { meetingsInsertSchema, meetingsUpdateSchema } from "../schemas";
 import {agents, meetings} from "@/db/schema";
 import { MeetingStatus } from "../types";
 
+import { generateAvatarUri } from "@/lib/avatar";
+import { streamVideo } from "@/lib/stream-video";
+
 export const meetingsRouter = createTRPCRouter({
+  generateToken: protectedProcedure.mutation(async({ctx}) =>{
+    await streamVideo.upsertUsers([
+      {
+        id: ctx.auth.user.id,
+        name: ctx.auth.user.name,
+        role: "admin",
+        image: 
+          ctx.auth.user.image ??
+          generateAvatarUri({ seed: ctx.auth.user.name, variant: "initials"}),
+      },
+    ]);
+    
+    const expirationTime = Math.floor(Date.now()/1000) + 3600;
+    const issuedAt = Math.floor(Date.now()/1000) - 60;
+    
+    const token = streamVideo.generateUserToken({
+      user_id: ctx.auth.user.id,
+      exp: expirationTime,
+      validity_in_seconds: issuedAt,
+    });
+
+    return token;
+  }),
+        
   remove: protectedProcedure
         .input(z.object({ id: z.string() }))
         .mutation(async({ctx, input}) => {
@@ -69,9 +96,30 @@ export const meetingsRouter = createTRPCRouter({
         .returning();
 
       // TODO: Create Stream Call, Upsert Stream Users
-
+      const call = streamVideo.video.call("default", createdMeeting.id);
+      await call.create({
+        data: {
+          created_by_id: ctx.auth.user.id,
+          custom: {
+            meetingId: createdMeeting.id,
+            meetingName: createdMeeting.name
+          },
+          settings_override: {
+            transcription:{
+              language: "en",
+              mode: "auto-on",
+              closed_caption_mode: "auto-on",
+            },
+            recording: {
+              mode: "auto-on",
+              quality: "1080p",
+            },
+          },
+        },
+      })
       return createdMeeting;
     }),
+
   getOne: protectedProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ input, ctx }) => {
